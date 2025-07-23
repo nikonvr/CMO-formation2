@@ -970,12 +970,14 @@ def trigger_nominal_recalc():
 
 # --- SECTION : ACTIONS ET LOGIQUE PRINCIPALE ---
 
-def generate_3d_plot_html(lab_mc_points, lab_nominal_point):
+def generate_3d_plot_html(lab_mc_points, lab_nominal_point, srgb_mc_colors, srgb_nominal_color):
     """Génère le code HTML/JS pour le tracé 3D Three.js."""
     
     # Convert numpy arrays to lists for JSON serialization
     lab_mc_list = lab_mc_points.tolist()
     lab_nominal_list = lab_nominal_point.tolist()
+    srgb_mc_list = srgb_mc_colors.tolist()
+    srgb_nominal_list = srgb_nominal_color.tolist()
 
     html = f"""
     <!DOCTYPE html>
@@ -996,6 +998,8 @@ def generate_3d_plot_html(lab_mc_points, lab_nominal_point):
             // --- Data from Python ---
             const lab_mc = {json.dumps(lab_mc_list)};
             const lab_nominal = {json.dumps(lab_nominal_list)};
+            const srgb_mc = {json.dumps(srgb_mc_list)};
+            const srgb_nominal = {json.dumps(srgb_nominal_list)};
 
             // --- Scene Setup ---
             const container = document.getElementById('container-3d');
@@ -1037,9 +1041,13 @@ def generate_3d_plot_html(lab_mc_points, lab_nominal_point):
             const pointGeometry = new THREE.SphereGeometry(1.5, 8, 8);
             
             // Monte Carlo points
-            lab_mc.forEach(p => {{
+            lab_mc.forEach((p, index) => {{
                 const [l, a, b] = p;
-                const material = new THREE.MeshStandardMaterial({{ color: 0xffffff, roughness: 0.5 }});
+                const srgb_color = srgb_mc[index];
+                const material = new THREE.MeshStandardMaterial({{ 
+                    color: new THREE.Color(srgb_color[0], srgb_color[1], srgb_color[2]), 
+                    roughness: 0.5 
+                }});
                 const point = new THREE.Mesh(pointGeometry, material);
                 // Mapping: a* -> X, L* -> Y, b* -> Z
                 point.position.set(a, l - 50, b);
@@ -1048,7 +1056,11 @@ def generate_3d_plot_html(lab_mc_points, lab_nominal_point):
 
             // Nominal point
             const nominalGeometry = new THREE.SphereGeometry(4, 16, 16);
-            const nominalMaterial = new THREE.MeshStandardMaterial({{ color: 0xff0000, emissive: 0x550000 }});
+            const nominalColor = new THREE.Color(srgb_nominal[0], srgb_nominal[1], srgb_nominal[2]);
+            const nominalMaterial = new THREE.MeshStandardMaterial({{ 
+                color: nominalColor, 
+                emissive: nominalColor.clone().multiplyScalar(0.5) 
+            }});
             const nominalPoint = new THREE.Mesh(nominalGeometry, nominalMaterial);
             nominalPoint.position.set(lab_nominal[1], lab_nominal[0] - 50, lab_nominal[2]);
             group.add(nominalPoint);
@@ -1774,10 +1786,16 @@ def run_color_analysis_wrapper(container):
                 # --- 3. Conversion de tous les spectres en L*a*b* ---
                 lab_points = [xyz_to_lab(spectrum_to_xyz(CIE_LAMBDA, rs, CIE_LAMBDA, CIE_X, CIE_Y, CIE_Z, ILLUMINANT_D65), XYZ_N_D65) for rs in all_rs_results]
                 
+                # --- NOUVEAU : Calcul des couleurs sRGB correspondantes ---
+                srgb_mc_points = [xyz_to_srgb(lab_to_xyz(lab, XYZ_N_D65)) for lab in lab_points]
+                srgb_nominal = xyz_to_srgb(lab_to_xyz(lab_nominal, XYZ_N_D65))
+
                 # --- 4. Stockage des résultats ---
                 st.session_state.color_results = {
                     'lab_nominal': lab_nominal,
                     'lab_mc_points': np.array(lab_points),
+                    'srgb_nominal': srgb_nominal,
+                    'srgb_mc_points': np.array(srgb_mc_points),
                     'r_moy_simple': r_moy_simple,
                     'r_moy_photopic': r_moy_photopic,
                     'backside_mode': "2 faces" if backside_enabled else "1 face"
@@ -2080,7 +2098,12 @@ with main_layout[1]:
             
             st.subheader("Visualisation 3D de l'espace L*a*b*")
             st.info("Cliquez et glissez sur la sphère pour la faire pivoter. Axes : Rouge=a*, Vert=L*, Bleu=b*.")
-            plot_html = generate_3d_plot_html(color_data['lab_mc_points'], color_data['lab_nominal'])
+            plot_html = generate_3d_plot_html(
+                color_data['lab_mc_points'], 
+                color_data['lab_nominal'],
+                color_data['srgb_mc_points'],
+                color_data['srgb_nominal']
+            )
             st.components.v1.html(plot_html, height=510, scrolling=False)
     
     with backside_tab:
