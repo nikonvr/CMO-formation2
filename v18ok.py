@@ -908,7 +908,6 @@ def initialize_session_state():
         st.session_state.is_optimized_state = False
         st.session_state.optimized_qwot_str = ""
         st.session_state.optimized_stack_sequence = None
-        st.session_state.ep_history = deque(maxlen=5)
         st.session_state.last_rmse = None
         st.session_state.needs_rerun_calc = False
         st.session_state.rerun_calc_params = {}
@@ -951,7 +950,6 @@ def clear_optimized_state():
     """Réinitialise l'état optimisé."""
     st.session_state.optimized_ep = None
     st.session_state.is_optimized_state = False
-    st.session_state.ep_history = deque(maxlen=5)
     st.session_state.optimized_qwot_str = ""
     st.session_state.optimized_stack_sequence = None
     st.session_state.last_rmse = None
@@ -1118,33 +1116,6 @@ def run_calculation_wrapper(is_optimized_run: bool, method_name: str, force_ep: 
         finally:
              if 'Substrate' not in st.session_state.materials and 'nSub_material_calc' in locals():
                      st.session_state.materials['Substrate'] = nSub_material_calc
-
-def undo_remove_wrapper():
-    """Annule la dernière action de suppression de couche."""
-    add_log("--- Annulation de la Dernière Suppression de Couche ---")
-    if not st.session_state.get('ep_history'):
-        st.warning("Aucune action à annuler.")
-        return
-
-    try:
-        last_ep, last_stack = st.session_state.ep_history.pop()
-        st.session_state.stack = last_stack
-        st.session_state.current_ep = last_ep.copy()
-
-        clear_optimized_state()
-
-        add_log(f"Annulation réussie. Structure restaurée avec {len(last_stack)} couches.")
-        st.session_state.needs_rerun_calc = True
-        st.session_state.rerun_calc_params = {
-            'is_optimized_run': False,
-            'method_name': "Annuler Suppression",
-            'force_ep': last_ep.copy()
-        }
-    except IndexError:
-        st.warning("L'historique d'annulation est vide.")
-    except Exception as e:
-        st.error(f"Erreur pendant l'opération d'annulation : {e}")
-        add_log(f"ERREUR FATALE dans undo_remove_wrapper : {e}\n{traceback.format_exc(limit=2)}")
 
 def run_de_optimization_wrapper(speed: str):
     """Exécute l'optimisation avec Differential Evolution, suivie d'un affinage local."""
@@ -1335,7 +1306,8 @@ def run_remove_thin_wrapper():
 
     with st.spinner("Suppression de la couche fine + Ré-optimisation..."):
         try:
-            st.session_state.ep_history.append((ep_start_removal.copy(), stack_before_removal.copy()))
+            # La logique de l'historique est supprimée ici
+            # st.session_state.ep_history.append((ep_start_removal.copy(), stack_before_removal.copy()))
 
             ep_after_removal, new_stack, structure_changed, removal_logs = _perform_layer_removal(
                 ep_start_removal, stack_before_removal, MIN_THICKNESS_PHYS_NM, log_prefix="  [Suppr.] "
@@ -1396,14 +1368,14 @@ def run_remove_thin_wrapper():
                     st.session_state.stack = stack_before_removal
             else:
                 st.info("Aucune couche n'a été supprimée.")
-                try:
-                    st.session_state.ep_history.pop()
-                except IndexError: pass
+                # try:
+                #     st.session_state.ep_history.pop()
+                # except IndexError: pass
         except Exception as e:
             st.error(f"Erreur lors de la suppression de la couche fine : {e}")
             add_log(f"ERREUR : {e}")
-            try: st.session_state.ep_history.pop()
-            except IndexError: pass
+            # try: st.session_state.ep_history.pop()
+            # except IndexError: pass
 
 def run_monte_carlo_wrapper(container):
     with container:
@@ -1822,7 +1794,10 @@ with main_layout[1]:
 
     with results_tab:
         st.subheader("Actions")
-        menu_cols = st.columns(4)
+        
+        # Disposition des boutons d'action
+        menu_cols = st.columns([1, 1, 1, 1.2])
+        
         with menu_cols[0]:
             if st.button("📊 Éval. Avant", key="eval_front_top", help="Calcule et affiche le spectre de la structure avant définie à gauche.", use_container_width=True):
                 st.session_state.action = 'eval_front'
@@ -1834,10 +1809,15 @@ with main_layout[1]:
             if st.button("🗑️ Suppr.+RéOpt", key="remove_thin_top", help="Identifie la couche la plus fine, la supprime (ou fusionne si possible), puis relance une optimisation locale.", disabled=not can_remove_structurally, use_container_width=True):
                 st.session_state.action = 'remove_thin'
         with menu_cols[3]:
-            can_undo_top = bool(st.session_state.get('ep_history'))
-            if st.button(f"↩️ Annuler ({len(st.session_state.get('ep_history', deque()))})", key="undo_remove_top", help="Annule la dernière action de suppression de couche.", disabled=not can_undo_top, use_container_width=True):
-                undo_remove_wrapper(); st.rerun()
-        
+            st.checkbox(
+                "Face Arrière",
+                value=st.session_state.backside_enabled,
+                key="backside_enabled_results_tab",
+                on_change=sync_backside_checkboxes,
+                args=("backside_enabled_results_tab",),
+                help="Inclut les réflexions de la face arrière du substrat dans le calcul. Synchronisé avec les autres onglets."
+            )
+
         st.slider(
             "Rayon d'action de l'optimisation globale",
             min_value=0.8, max_value=1.5, value=st.session_state.get('de_action_radius', 1.0), step=0.1,
@@ -1942,14 +1922,13 @@ with main_layout[1]:
 
     with color_tab:
         st.subheader("Analyse du Rendu Colorimétrique (CIELAB)")
-        # Ajout de la checkbox synchronisée
         st.checkbox(
             "Prendre en compte la face arrière",
             value=st.session_state.backside_enabled,
             key="backside_enabled_color_tab",
             on_change=sync_backside_checkboxes,
             args=("backside_enabled_color_tab",),
-            help="Inclut les réflexions de la face arrière du substrat dans le calcul. Synchronisé avec l'onglet 'Face Arrière'."
+            help="Inclut les réflexions de la face arrière du substrat dans le calcul. Synchronisé avec les autres onglets."
         )
         st.info("Cette analyse calcule la couleur de la réflectance (calculée comme 1-T) en utilisant l'illuminant D65 et l'observateur standard CIE 1931 à 2 degrés.")
         if st.button("🎨 Lancer l'analyse colorimétrique", key="run_color", help="Calcule le point de couleur nominal et une simulation de Monte-Carlo (200 tirages, σ=2nm) pour visualiser la dispersion des couleurs."):
@@ -2014,6 +1993,14 @@ with main_layout[1]:
 
     with random_draws_tab:
         st.subheader("Simulation de Monte-Carlo")
+        st.checkbox(
+            "Prendre en compte la face arrière",
+            value=st.session_state.backside_enabled,
+            key="backside_enabled_mc_tab",
+            on_change=sync_backside_checkboxes,
+            args=("backside_enabled_mc_tab",),
+            help="Inclut les réflexions de la face arrière du substrat dans le calcul. Synchronisé avec les autres onglets."
+        )
         st.number_input("Écart-type pour l'épaisseur (nm)", min_value=0.0, step=0.1, format="%.2f", key="monte_carlo_std_dev", help="Écart-type (en nm) de l'erreur aléatoire (distribution normale) appliquée à chaque couche pour la simulation.")
         if st.button("Lancer la simulation", key="run_mc", help="Simule 100 variations de la structure avec des erreurs aléatoires sur les épaisseurs pour évaluer la robustesse de la conception."): st.session_state.action = 'monte_carlo'; st.rerun()
         if 'monte_carlo_results' in st.session_state and st.session_state.monte_carlo_results:
@@ -2029,6 +2016,14 @@ with main_layout[1]:
 
     with tolerance_tab:
         st.subheader("Analyse de Tolérance")
+        st.checkbox(
+            "Prendre en compte la face arrière",
+            value=st.session_state.backside_enabled,
+            key="backside_enabled_tolerance_tab",
+            on_change=sync_backside_checkboxes,
+            args=("backside_enabled_tolerance_tab",),
+            help="Inclut les réflexions de la face arrière du substrat dans le calcul. Synchronisé avec les autres onglets."
+        )
         if st.button("Lancer l'analyse de tolérance", key="run_tolerance", help="Calcule l'impact de différentes erreurs de fabrication (en nm absolus et en % relatifs) sur la performance (RMSE)."): st.session_state.action = 'tolerance_analysis'; st.rerun()
         if 'tolerance_analysis_results' in st.session_state and st.session_state.tolerance_analysis_results:
             tol_data = st.session_state.tolerance_analysis_results
@@ -2046,67 +2041,46 @@ with main_layout[1]:
     with help_tab:
         st.header("❓ Guide d'utilisation de l'application")
         st.markdown("""
-        Bienvenue dans l'outil de conception de filtres optiques ! Cet outil vous permet de créer, d'analyser et d'optimiser des empilements de couches minces pour obtenir des propriétés optiques spécifiques.
-        
-        L'interface est divisée en deux parties principales :
-        1.  **Le panneau de gauche** pour la **configuration** de votre filtre.
-        2.  **Le panneau de droite** pour les **actions**, l'**analyse** et la **visualisation** des résultats.
+        Cet outil permet la conception et l'analyse de filtres optiques interférentiels basés sur des empilements de couches minces. Il s'appuie sur la méthode des matrices de transfert pour calculer la réponse spectrale et sur des algorithmes d'optimisation pour la synthèse de designs.
         
         ---
         
-        ### 📜 Panneau de Gauche : Configuration
+        ### 📜 Panneau de Gauche : Définition du Système Optique
         
-        C'est ici que vous définissez tous les paramètres de votre filtre.
+        #### 1. Matériaux : Propriétés Optiques
+        La performance d'un filtre dépend des propriétés optiques des matériaux le constituant, principalement leur indice de réfraction complexe `ñ = n - ik`.
+        - **Modèle de Cauchy** : Pour les matériaux diélectriques dans le domaine visible, l'absorption est souvent négligeable (`k ≈ 0`). La dispersion de l'indice de réfraction `n(λ)` est modélisée par une loi de Cauchy à deux coefficients : `n(λ) = A + B/λ²`. Ce modèle de dispersion normale est une approximation valide loin des bandes d'absorption. Les coefficients `A` et `B` sont déterminés par l'inversion de la matrice système à partir des indices fournis à 400 nm et 700 nm.
+        - **Substrat** : Le milieu semi-infini sur lequel l'empilement est déposé.
         
-        #### 1. Matériaux (Modèle de Cauchy)
-        Les filtres optiques sont faits de matériaux diélectriques transparents. Pour les simuler, nous devons connaître leur **indice de réfraction** `n`, qui varie avec la couleur (la longueur d'onde `λ`).
-        - **Modèle de Cauchy** : Ce programme utilise une formule simple (loi de Cauchy) pour décrire cette variation. Vous n'avez besoin de fournir que deux points de mesure.
-        - **`Indice @ 400nm` et `Indice @ 700nm`** : Entrez l'indice de réfraction du matériau pour la lumière violette (400 nm) et rouge (700 nm). Le programme calculera l'indice pour toutes les autres couleurs.
-        - **Matériaux prédéfinis** : `H` (High index), `L` (Low index), `A`, `B`, `C` sont des noms génériques. Vous pouvez modifier leurs propriétés pour qu'ils correspondent à des matériaux réels (ex: TiO₂, SiO₂, MgF₂, etc.). Le `Substrate` est le matériau de base sur lequel le filtre est déposé (généralement du verre).
+        #### 2. Structure Avant : Définition de l'Empilement
+        La structure est définie couche par couche, depuis le substrat (couche 1) vers le milieu incident (généralement l'air, n=1).
+        - **`Longueur d'onde de référence λ₀`** : Longueur d'onde centrale utilisée pour la définition des épaisseurs optiques.
+        - **`Épaisseur (QWOT)`** : "Quarter-Wave Optical Thickness". Il s'agit d'une unité normalisée pour l'épaisseur optique (`nd`). Une valeur de `1.0` correspond à une épaisseur optique égale à un quart de la longueur d'onde de référence (`nd = λ₀/4`). L'épaisseur physique `d` est donc `d = λ₀ / (4n(λ₀))`. Les structures de type "quart d'onde" sont fondamentales pour la réalisation de miroirs de Bragg et de traitements antireflets simples.
+        - **`Var.`** (Variable) : Spécifie si l'épaisseur physique d'une couche est un paramètre libre lors de l'optimisation numérique.
         
-        #### 2. Structure Avant
-        C'est ici que vous construisez votre filtre, couche par couche.
-        - **`Longueur d'onde de référence λ₀`** : Une longueur d'onde "pivot" pour vos calculs. Elle est cruciale pour l'unité QWOT.
-        - **`Couche`** : L'ordre des couches, de bas (proche du substrat) en haut (vers l'air).
-        - **`Matériau`** : Choisissez l'un des matériaux définis ci-dessus pour chaque couche.
-        - **`Épaisseur (QWOT)`** : L'épaisseur optique de la couche. QWOT signifie "Quarter-Wave Optical Thickness" (Épaisseur Optique en Quart d'Onde). C'est une unité très pratique :
-            - `1.0 QWOT` signifie que l'épaisseur physique de la couche est `λ₀ / (4 * n)`, où `n` est l'indice du matériau à `λ₀`.
-            - C'est une façon standard de concevoir des filtres, car une alternance de couches H et L de 1.0 QWOT crée un miroir très efficace à la longueur d'onde `λ₀`.
-        - **`Ép. Phys (nm)`** : L'épaisseur physique réelle de la couche en nanomètres, calculée automatiquement à partir du QWOT et de `λ₀`. Ce champ n'est pas modifiable directement.
-        - **`Var.`** (Variable) : Cochez cette case si vous autorisez l'optimiseur à **modifier l'épaisseur de cette couche** pour atteindre vos objectifs. Décochez-la pour "verrouiller" l'épaisseur d'une couche.
-        - **Boutons d'action** : `Ajouter`, `Supprimer`, `Initialiser QWOTs` vous permettent de gérer facilement la structure.
-        
-        #### 3. Cibles & Paramètres
-        Ici, vous définissez le **cahier des charges** de votre filtre.
-        - **`On`** : Active ou désactive une ligne de cible.
-        - **`λmin`, `λmax`** : La plage de longueurs d'onde (en nm) sur laquelle la cible s'applique.
-        - **`Tmin`, `Tmax`** : La transmittance (de 0.0 à 1.0) que vous souhaitez atteindre. Si `Tmin` = `Tmax`, vous visez une transmittance constante. Si elles sont différentes, vous visez une pente.
-        - **`Poids`** : L'importance relative de cette cible. Si une cible a un poids de `10`, le programme fera 10 fois plus d'efforts pour la satisfaire qu'une cible avec un poids de `1`.
+        #### 3. Cibles & Paramètres : Fonction de Mérite
+        L'optimisation vise à minimiser une **fonction de mérite** (ou fonction de coût), qui quantifie l'écart entre la performance calculée et le cahier des charges.
+        - **Cibles** : Définissent la transmittance `T(λ)` souhaitée sur des bandes spectrales.
+        - **Poids** : Facteur de pondération `w` appliqué à chaque cible.
+        - **Fonction de Mérite (RMSE)** : Le programme minimise la racine de l'erreur quadratique moyenne pondérée (weighted RMSE) : 
+          `RMSE = sqrt( Σ[w_i * (T_calc(λ_i) - T_target(λ_i))²] / Σ[w_i] )`, où la somme est effectuée sur tous les points de la grille spectrale d'optimisation.
         
         ---
         
-        ### 🖥️ Panneau de Droite : Actions et Analyse
-        
-        Ce panneau contient plusieurs onglets pour interagir avec votre design.
+        ### 🖥️ Panneau de Droite : Analyse et Synthèse
         
         #### Onglet "Résultats"
-        C'est le centre de contrôle principal.
-        - **`Éval. Avant`** : Calcule et affiche la performance de la structure actuellement définie à gauche.
-        - **`Opt. Globale`** : Lance l'algorithme d'optimisation. Il va tester des milliers de combinaisons d'épaisseurs (pour les couches "Var.") pour trouver la solution qui minimise l'erreur par rapport à vos cibles. Le résultat de cette optimisation **remplace automatiquement la structure dans le panneau de gauche**.
-        - **`Suppr.+RéOpt`** : Un outil de "simplification". Il trouve la couche la plus fine de votre design, la supprime (ou la fusionne avec ses voisines si elles sont du même matériau), puis relance une optimisation. C'est utile pour voir si un design plus simple (et donc moins cher à produire) peut quand même fonctionner.
-        - **`Annuler`** : Annule la dernière action de suppression.
-        - **Graphiques** :
-            - Le **graphique principal** montre la transmittance de votre filtre. La courbe bleue est le résultat calculé, et les croix rouges représentent vos cibles. Le **RMSE** est un score d'erreur : plus il est bas, mieux c'est.
-            - Le **profil d'indice** montre comment l'indice de réfraction change à travers l'épaisseur de votre empilement.
-            - La **structure** est une vue schématique des couches, de leurs épaisseurs et de leurs matériaux.
+        - **`Éval. Avant`** : Calcule la transmittance et la réflectance de l'empilement en utilisant la **méthode des matrices de transfert**. Pour un empilement de N couches, la matrice caractéristique totale `M` est le produit des matrices individuelles de chaque couche : `M = M₁ * M₂ * ... * Mₙ`. Les coefficients de réflexion et de transmission sont ensuite dérivés de cette matrice globale.
+        - **`Opt. Globale`** : Lance un processus d'optimisation hybride :
+            1.  **Évolution Différentielle** : Un algorithme d'optimisation stochastique et global qui explore l'espace des paramètres (les épaisseurs des couches variables) pour trouver une région prometteuse contenant le minimum global de la fonction de mérite.
+            2.  **L-BFGS-B** : Un algorithme quasi-Newton qui utilise une approximation du gradient de la fonction de mérite pour converger rapidement vers le minimum local le plus proche de la solution trouvée par l'évolution différentielle.
+        - **`Suppr.+RéOpt`** : Applique une heuristique de "simplification" (pruning) en retirant la couche ayant le plus faible impact optique (la plus fine), puis relance une optimisation locale pour affiner le nouveau design plus simple.
         
         #### Autres Onglets
-        - **`Tracé d'indices`** : Visualise la dispersion (la variation de l'indice avec la longueur d'onde) de tous vos matériaux.
-        - **`Rendu Colorimétrique`** : Calcule la couleur perçue de votre filtre en réflexion. Le point rouge est le résultat idéal, et le nuage de points blancs montre comment la couleur pourrait varier à cause de petites erreurs de fabrication.
-        - **`Face Arrière`** : Permet de simuler des substrats épais en tenant compte des réflexions sur la deuxième face, ce qui donne un résultat plus réaliste pour certaines applications.
-        - **`Tirages Aléatoires`** : Teste la **robustesse** de votre design. Il simule des centaines de fois la fabrication de votre filtre en introduisant de petites erreurs aléatoires sur les épaisseurs. La zone bleue montre l'intervalle de performance probable (80% des cas). Un design robuste aura une zone bleue très fine.
-        - **`Analyse de Tolérance`** : Vous aide à déterminer la précision requise pour la fabrication. Il montre comment l'erreur (RMSE) augmente lorsque l'écart-type des erreurs de fabrication (en nm ou en %) augmente.
-        - **`Logs`** : Affiche un journal détaillé de toutes les opérations. Utile pour comprendre les étapes de calcul ou pour déboguer.
+        - **`Rendu Colorimétrique`** : Calcule les coordonnées trichromatiques **CIE XYZ** par intégration spectrale du produit de la réflectance `R(λ)`, de l'illuminant normalisé (D65) et des fonctions colorimétriques de l'observateur standard CIE 1931 2°. Ces coordonnées sont ensuite converties dans l'espace de couleur perceptuellement uniforme **CIELAB (`L*a*b*`)**.
+        - **`Face Arrière`** : Modélise le substrat comme un étalon d'épaisseur non-cohérente. Les réflexions multiples entre les deux faces sont sommées en intensité (et non en amplitude), ce qui est physiquement correct pour les substrats dont l'épaisseur est très supérieure à la longueur de cohérence de la source.
+        - **`Tirages Aléatoires (Monte-Carlo)`** : Analyse statistique de la sensibilité du design aux erreurs de production. Les épaisseurs de chaque couche sont perturbées par un bruit gaussien de moyenne nulle et d'écart-type `σ`. La distribution des performances spectrales résultantes permet d'estimer la robustesse et le rendement de fabrication.
+        - **`Analyse de Tolérance`** : Évalue la dégradation de la fonction de mérite (RMSE) en fonction de l'amplitude des erreurs de fabrication (l'écart-type `σ`). Cette analyse est cruciale pour spécifier les tolérances de production requises.
         """)
 
 
