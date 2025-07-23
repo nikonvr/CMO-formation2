@@ -13,6 +13,7 @@ import time
 import datetime
 import traceback
 from collections import deque
+import json
 
 # --- SECTION : CONSTANTES ET CONFIGURATION ---
 
@@ -969,6 +970,136 @@ def trigger_nominal_recalc():
 
 # --- SECTION : ACTIONS ET LOGIQUE PRINCIPALE ---
 
+def generate_3d_plot_html(lab_mc_points, lab_nominal_point):
+    """Génère le code HTML/JS pour le tracé 3D Three.js."""
+    
+    # Convert numpy arrays to lists for JSON serialization
+    lab_mc_list = lab_mc_points.tolist()
+    lab_nominal_list = lab_nominal_point.tolist()
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>CIELAB 3D Plot</title>
+        <style>
+            body {{ margin: 0; overflow: hidden; }}
+            canvas {{ display: block; }}
+        </style>
+    </head>
+    <body>
+        <div id="container-3d"></div>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        <script>
+            // --- Data from Python ---
+            const lab_mc = {json.dumps(lab_mc_list)};
+            const lab_nominal = {json.dumps(lab_nominal_list)};
+
+            // --- Scene Setup ---
+            const container = document.getElementById('container-3d');
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f2f6); // Match Streamlit theme
+            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / 500, 0.1, 1000);
+            camera.position.z = 150;
+
+            const renderer = new THREE.WebGLRenderer({{ antialias: true }});
+            renderer.setSize(container.clientWidth, 500); // Fixed height
+            container.appendChild(renderer.domElement);
+
+            // --- Lighting ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(50, 100, 75);
+            scene.add(directionalLight);
+
+            // --- Main group for rotation ---
+            const group = new THREE.Group();
+            scene.add(group);
+
+            // --- Helper: Axes (X=Red=a*, Y=Green=L*, Z=Blue=b*) ---
+            const axesHelper = new THREE.AxesHelper(120);
+            group.add(axesHelper);
+            
+            // --- Helper: Sphere Boundary ---
+            const sphereGeom = new THREE.SphereGeometry(100, 32, 32);
+            const wireframe = new THREE.WireframeGeometry(sphereGeom);
+            const line = new THREE.LineSegments(wireframe);
+            line.material.depthTest = false;
+            line.material.opacity = 0.25;
+            line.material.transparent = true;
+            line.material.color.set(0x888888);
+            group.add(line);
+
+            // --- Plotting Points ---
+            const pointGeometry = new THREE.SphereGeometry(1.5, 8, 8);
+            
+            // Monte Carlo points
+            lab_mc.forEach(p => {{
+                const [l, a, b] = p;
+                const material = new THREE.MeshStandardMaterial({{ color: 0xffffff, roughness: 0.5 }});
+                const point = new THREE.Mesh(pointGeometry, material);
+                // Mapping: a* -> X, L* -> Y, b* -> Z
+                point.position.set(a, l - 50, b);
+                group.add(point);
+            }});
+
+            // Nominal point
+            const nominalGeometry = new THREE.SphereGeometry(4, 16, 16);
+            const nominalMaterial = new THREE.MeshStandardMaterial({{ color: 0xff0000, emissive: 0x550000 }});
+            const nominalPoint = new THREE.Mesh(nominalGeometry, nominalMaterial);
+            nominalPoint.position.set(lab_nominal[1], lab_nominal[0] - 50, lab_nominal[2]);
+            group.add(nominalPoint);
+
+            // --- Mouse Controls ---
+            let isDragging = false;
+            let previousMousePosition = {{ x: 0, y: 0 }};
+
+            renderer.domElement.addEventListener('mousedown', e => {{ isDragging = true; }});
+            renderer.domElement.addEventListener('mouseup', e => {{ isDragging = false; }});
+            renderer.domElement.addEventListener('mousemove', e => {{
+                const deltaMove = {{
+                    x: e.offsetX - previousMousePosition.x,
+                    y: e.offsetY - previousMousePosition.y
+                }};
+
+                if (isDragging) {{
+                    const deltaRotationQuaternion = new THREE.Quaternion()
+                        .setFromEuler(new THREE.Euler(
+                            toRadians(deltaMove.y * 1),
+                            toRadians(deltaMove.x * 1),
+                            0,
+                            'XYZ'
+                        ));
+                    group.quaternion.multiplyQuaternions(deltaRotationQuaternion, group.quaternion);
+                }}
+                previousMousePosition = {{ x: e.offsetX, y: e.offsetY }};
+            }});
+            
+            function toRadians(angle) {{ return angle * (Math.PI / 180); }}
+
+            // --- Animation Loop ---
+            function animate() {{
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }}
+            animate();
+
+            // --- Handle Resize ---
+            window.addEventListener('resize', () => {{
+                camera.aspect = container.clientWidth / 500;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, 500);
+            }});
+
+        </script>
+    </body>
+    </html>
+    """
+    return html
+
 def update_nominal_stack_from_ep(ep_vector: np.ndarray, stack_sequence: List[Dict], l0: float, materials: Dict) -> bool:
     """Met à jour st.session_state.stack à partir d'un vecteur d'épaisseurs physiques."""
     add_log("--- Mise à jour auto. de la structure nominale depuis les épaisseurs optimisées ---")
@@ -1306,9 +1437,6 @@ def run_remove_thin_wrapper():
 
     with st.spinner("Suppression de la couche fine + Ré-optimisation..."):
         try:
-            # La logique de l'historique est supprimée ici
-            # st.session_state.ep_history.append((ep_start_removal.copy(), stack_before_removal.copy()))
-
             ep_after_removal, new_stack, structure_changed, removal_logs = _perform_layer_removal(
                 ep_start_removal, stack_before_removal, MIN_THICKNESS_PHYS_NM, log_prefix="  [Suppr.] "
             )
@@ -1368,14 +1496,9 @@ def run_remove_thin_wrapper():
                     st.session_state.stack = stack_before_removal
             else:
                 st.info("Aucune couche n'a été supprimée.")
-                # try:
-                #     st.session_state.ep_history.pop()
-                # except IndexError: pass
         except Exception as e:
             st.error(f"Erreur lors de la suppression de la couche fine : {e}")
             add_log(f"ERREUR : {e}")
-            # try: st.session_state.ep_history.pop()
-            # except IndexError: pass
 
 def run_monte_carlo_wrapper(container):
     with container:
@@ -1795,7 +1918,6 @@ with main_layout[1]:
     with results_tab:
         st.subheader("Actions")
         
-        # Disposition des boutons d'action
         menu_cols = st.columns([1, 1, 1, 1.2])
         
         with menu_cols[0]:
@@ -1955,6 +2077,11 @@ with main_layout[1]:
                 st.divider()
                 st.metric("a*", f"{lab_nominal[1]:.2f}", help="L'axe rouge-vert. a* > 0 est rouge, a* < 0 est vert.")
                 st.metric("b*", f"{lab_nominal[2]:.2f}", help="L'axe jaune-bleu. b* > 0 est jaune, b* < 0 est bleu.")
+            
+            st.subheader("Visualisation 3D de l'espace L*a*b*")
+            st.info("Cliquez et glissez sur la sphère pour la faire pivoter. Axes : Rouge=a*, Vert=L*, Bleu=b*.")
+            plot_html = generate_3d_plot_html(color_data['lab_mc_points'], color_data['lab_nominal'])
+            st.components.v1.html(plot_html, height=510, scrolling=False)
     
     with backside_tab:
         st.subheader("Structure Face Arrière (Épaisseurs Fixes)")
@@ -2039,7 +2166,7 @@ with main_layout[1]:
         st.code(log_text, language='text')
         
     with help_tab:
-        st.header("❓ Guide d'utilisation de l'application")
+        st.header("❓ Guide d'utilisation et principes scientifiques")
         st.markdown("""
         Cet outil permet la conception et l'analyse de filtres optiques interférentiels basés sur des empilements de couches minces. Il s'appuie sur la méthode des matrices de transfert pour calculer la réponse spectrale et sur des algorithmes d'optimisation pour la synthèse de designs.
         
