@@ -283,7 +283,7 @@ def compute_stack_matrix_core_jax(ep_vector: jnp.ndarray, layer_indices: jnp.nda
 
 @jax.jit
 def calculate_single_wavelength_TR_core(l_val: jnp.ndarray, ep_vector_contig: jnp.ndarray,
-                                        layer_indices_at_lval: jnp.ndarray, nSub_at_lval: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                                          layer_indices_at_lval: jnp.ndarray, nSub_at_lval: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Calcule la transmittance (T) et la réflectance (R) pour une seule longueur d'onde."""
     etainc = jnp.array(1.0 + 0j, dtype=DTYPE_COMPLEX)
     etasub = nSub_at_lval
@@ -1809,14 +1809,15 @@ with main_layout[0]:
         cols[5].number_input(f"Poids Cible {i+1}", value=target.get('weight', 1.0), min_value=0.0, format="%.2f", step=0.1, key=f"target_weight_{i}", label_visibility="collapsed", on_change=update_target_item, args=(i, 'weight'), help="Importance relative de cette cible dans le calcul d'erreur (RMSE).")
 
 with main_layout[1]:
-    results_tab, indices_tab, color_tab, backside_tab, random_draws_tab, tolerance_tab, logs_tab = st.tabs([
+    results_tab, indices_tab, color_tab, backside_tab, random_draws_tab, tolerance_tab, logs_tab, help_tab = st.tabs([
         "**Résultats**",
         "**Tracé d'indices**", 
         "**Rendu Colorimétrique**",
         "**Face Arrière**", 
         "**Tirages Aléatoires**", 
         "**Analyse de Tolérance**", 
-        "**Logs**"
+        "**Logs**",
+        "**❓ Aide**"
     ])
 
     with results_tab:
@@ -2041,6 +2042,73 @@ with main_layout[1]:
         if st.button("Effacer les logs", help="Nettoie la fenêtre des logs."): st.session_state.log_messages.clear(); st.rerun()
         log_text = "\n".join(st.session_state.get('log_messages', ['Aucun log.']))
         st.code(log_text, language='text')
+        
+    with help_tab:
+        st.header("❓ Guide d'utilisation de l'application")
+        st.markdown("""
+        Bienvenue dans l'outil de conception de filtres optiques ! Cet outil vous permet de créer, d'analyser et d'optimiser des empilements de couches minces pour obtenir des propriétés optiques spécifiques.
+        
+        L'interface est divisée en deux parties principales :
+        1.  **Le panneau de gauche** pour la **configuration** de votre filtre.
+        2.  **Le panneau de droite** pour les **actions**, l'**analyse** et la **visualisation** des résultats.
+        
+        ---
+        
+        ### 📜 Panneau de Gauche : Configuration
+        
+        C'est ici que vous définissez tous les paramètres de votre filtre.
+        
+        #### 1. Matériaux (Modèle de Cauchy)
+        Les filtres optiques sont faits de matériaux diélectriques transparents. Pour les simuler, nous devons connaître leur **indice de réfraction** `n`, qui varie avec la couleur (la longueur d'onde `λ`).
+        - **Modèle de Cauchy** : Ce programme utilise une formule simple (loi de Cauchy) pour décrire cette variation. Vous n'avez besoin de fournir que deux points de mesure.
+        - **`Indice @ 400nm` et `Indice @ 700nm`** : Entrez l'indice de réfraction du matériau pour la lumière violette (400 nm) et rouge (700 nm). Le programme calculera l'indice pour toutes les autres couleurs.
+        - **Matériaux prédéfinis** : `H` (High index), `L` (Low index), `A`, `B`, `C` sont des noms génériques. Vous pouvez modifier leurs propriétés pour qu'ils correspondent à des matériaux réels (ex: TiO₂, SiO₂, MgF₂, etc.). Le `Substrate` est le matériau de base sur lequel le filtre est déposé (généralement du verre).
+        
+        #### 2. Structure Avant
+        C'est ici que vous construisez votre filtre, couche par couche.
+        - **`Longueur d'onde de référence λ₀`** : Une longueur d'onde "pivot" pour vos calculs. Elle est cruciale pour l'unité QWOT.
+        - **`Couche`** : L'ordre des couches, de bas (proche du substrat) en haut (vers l'air).
+        - **`Matériau`** : Choisissez l'un des matériaux définis ci-dessus pour chaque couche.
+        - **`Épaisseur (QWOT)`** : L'épaisseur optique de la couche. QWOT signifie "Quarter-Wave Optical Thickness" (Épaisseur Optique en Quart d'Onde). C'est une unité très pratique :
+            - `1.0 QWOT` signifie que l'épaisseur physique de la couche est `λ₀ / (4 * n)`, où `n` est l'indice du matériau à `λ₀`.
+            - C'est une façon standard de concevoir des filtres, car une alternance de couches H et L de 1.0 QWOT crée un miroir très efficace à la longueur d'onde `λ₀`.
+        - **`Ép. Phys (nm)`** : L'épaisseur physique réelle de la couche en nanomètres, calculée automatiquement à partir du QWOT et de `λ₀`. Ce champ n'est pas modifiable directement.
+        - **`Var.`** (Variable) : Cochez cette case si vous autorisez l'optimiseur à **modifier l'épaisseur de cette couche** pour atteindre vos objectifs. Décochez-la pour "verrouiller" l'épaisseur d'une couche.
+        - **Boutons d'action** : `Ajouter`, `Supprimer`, `Initialiser QWOTs` vous permettent de gérer facilement la structure.
+        
+        #### 3. Cibles & Paramètres
+        Ici, vous définissez le **cahier des charges** de votre filtre.
+        - **`On`** : Active ou désactive une ligne de cible.
+        - **`λmin`, `λmax`** : La plage de longueurs d'onde (en nm) sur laquelle la cible s'applique.
+        - **`Tmin`, `Tmax`** : La transmittance (de 0.0 à 1.0) que vous souhaitez atteindre. Si `Tmin` = `Tmax`, vous visez une transmittance constante. Si elles sont différentes, vous visez une pente.
+        - **`Poids`** : L'importance relative de cette cible. Si une cible a un poids de `10`, le programme fera 10 fois plus d'efforts pour la satisfaire qu'une cible avec un poids de `1`.
+        
+        ---
+        
+        ### 🖥️ Panneau de Droite : Actions et Analyse
+        
+        Ce panneau contient plusieurs onglets pour interagir avec votre design.
+        
+        #### Onglet "Résultats"
+        C'est le centre de contrôle principal.
+        - **`Éval. Avant`** : Calcule et affiche la performance de la structure actuellement définie à gauche.
+        - **`Opt. Globale`** : Lance l'algorithme d'optimisation. Il va tester des milliers de combinaisons d'épaisseurs (pour les couches "Var.") pour trouver la solution qui minimise l'erreur par rapport à vos cibles. Le résultat de cette optimisation **remplace automatiquement la structure dans le panneau de gauche**.
+        - **`Suppr.+RéOpt`** : Un outil de "simplification". Il trouve la couche la plus fine de votre design, la supprime (ou la fusionne avec ses voisines si elles sont du même matériau), puis relance une optimisation. C'est utile pour voir si un design plus simple (et donc moins cher à produire) peut quand même fonctionner.
+        - **`Annuler`** : Annule la dernière action de suppression.
+        - **Graphiques** :
+            - Le **graphique principal** montre la transmittance de votre filtre. La courbe bleue est le résultat calculé, et les croix rouges représentent vos cibles. Le **RMSE** est un score d'erreur : plus il est bas, mieux c'est.
+            - Le **profil d'indice** montre comment l'indice de réfraction change à travers l'épaisseur de votre empilement.
+            - La **structure** est une vue schématique des couches, de leurs épaisseurs et de leurs matériaux.
+        
+        #### Autres Onglets
+        - **`Tracé d'indices`** : Visualise la dispersion (la variation de l'indice avec la longueur d'onde) de tous vos matériaux.
+        - **`Rendu Colorimétrique`** : Calcule la couleur perçue de votre filtre en réflexion. Le point rouge est le résultat idéal, et le nuage de points blancs montre comment la couleur pourrait varier à cause de petites erreurs de fabrication.
+        - **`Face Arrière`** : Permet de simuler des substrats épais en tenant compte des réflexions sur la deuxième face, ce qui donne un résultat plus réaliste pour certaines applications.
+        - **`Tirages Aléatoires`** : Teste la **robustesse** de votre design. Il simule des centaines de fois la fabrication de votre filtre en introduisant de petites erreurs aléatoires sur les épaisseurs. La zone bleue montre l'intervalle de performance probable (80% des cas). Un design robuste aura une zone bleue très fine.
+        - **`Analyse de Tolérance`** : Vous aide à déterminer la précision requise pour la fabrication. Il montre comment l'erreur (RMSE) augmente lorsque l'écart-type des erreurs de fabrication (en nm ou en %) augmente.
+        - **`Logs`** : Affiche un journal détaillé de toutes les opérations. Utile pour comprendre les étapes de calcul ou pour déboguer.
+        """)
+
 
 # --- SECTION : BOUCLE PRINCIPALE DE CONTRÔLE ---
 
